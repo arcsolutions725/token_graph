@@ -55,6 +55,7 @@ export interface Ticker {
   startPrice2d?: number;
   startPrice7d?: number;
   startPrice30d?: number;
+  volatility1y?: number;
   volatility7d?: number;
   low7d?: number;
   sparklineData?: number[];

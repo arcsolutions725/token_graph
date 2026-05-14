@@ -213,21 +213,20 @@ export default function App() {
           const m7d = getLongMetrics(7);
           const m30d = getLongMetrics(30);
 
-          // Calculate 7d volatility (max/min change with direction)
-          const last7d = lClose.slice(-7);
-          let min7d = last7d[0];
-          let max7d = last7d[0];
+          // Calculate volatility for the entire duration (1 year)
+          let minVal = lClose[0];
+          let maxVal = lClose[0];
           let minIdx = 0;
           let maxIdx = 0;
 
-          last7d.forEach((p: number, i: number) => {
-            if (p < min7d) { min7d = p; minIdx = i; }
-            if (p > max7d) { max7d = p; maxIdx = i; }
+          lClose.forEach((p: number, i: number) => {
+            if (p < minVal) { minVal = p; minIdx = i; }
+            if (p > maxVal) { maxVal = p; maxIdx = i; }
           });
 
-          const volatility7d = maxIdx < minIdx 
-            ? (min7d - max7d) / max7d  // Max was older, negative change
-            : (max7d - min7d) / min7d; // Min was older, positive change
+          const volatility1y = maxIdx < minIdx 
+            ? (minVal - maxVal) / maxVal  // Max was older, negative change
+            : (maxVal - minVal) / minVal; // Min was older, positive change
 
           Object.assign(result, {
             startPrice7d: m7d.startPrice,
@@ -235,8 +234,8 @@ export default function App() {
             startPrice30d: m30d.startPrice,
             sparkline30d: m30d.sparkline,
             sparklineData: lClose,
-            volatility7d: volatility7d,
-            low7d: min7d,
+            volatility1y: volatility1y,
+            low7d: minVal,
           });
         }
 
@@ -674,12 +673,12 @@ export default function App() {
                   <td className="py-5 text-center">
                     <div className="flex flex-col items-center">
                       <Sparkline data={ticker.sparklineData} width={140} height={45} strokeWidth={2} />
-                      {ticker.volatility7d !== undefined && (
+                      {ticker.volatility1y !== undefined && (
                         <span className={cn(
                           "text-[10px] mt-2 font-bold tracking-tight px-1.5 py-0.5 rounded-sm",
-                          ticker.volatility7d > 0 ? "text-[#00c087] bg-[#00c087]/10" : "text-[#ff3b30] bg-[#ff3b30]/10"
+                          ticker.volatility1y > 0 ? "text-[#00c087] bg-[#00c087]/10" : "text-[#ff3b30] bg-[#ff3b30]/10"
                         )}>
-                          7d: {ticker.volatility7d > 0 ? '+' : ''}{(ticker.volatility7d * 100).toFixed(2)}%
+                          1y: {ticker.volatility1y > 0 ? '+' : ''}{(ticker.volatility1y * 100).toFixed(2)}%
                         </span>
                       )}
                     </div>
