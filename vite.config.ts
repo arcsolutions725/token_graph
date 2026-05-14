@@ -7,6 +7,8 @@ export default defineConfig({
     react(),
   ],
   server: {
+    port: 5184,
+    host: '0.0.0.0',
     proxy: {
       '/api/mexc': {
         target: 'https://contract.mexc.com',
@@ -21,5 +23,9 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/ws\/mexc/, ''),
       },
     },
+  },
+  preview: {
+    port: 5184,
+    host: '0.0.0.0',
   },
 })
