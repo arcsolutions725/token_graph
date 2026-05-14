@@ -213,13 +213,30 @@ export default function App() {
           const m7d = getLongMetrics(7);
           const m30d = getLongMetrics(30);
 
+          // Calculate 7d volatility (max/min change with direction)
+          const last7d = lClose.slice(-7);
+          let min7d = last7d[0];
+          let max7d = last7d[0];
+          let minIdx = 0;
+          let maxIdx = 0;
+
+          last7d.forEach((p: number, i: number) => {
+            if (p < min7d) { min7d = p; minIdx = i; }
+            if (p > max7d) { max7d = p; maxIdx = i; }
+          });
+
+          const volatility7d = maxIdx < minIdx 
+            ? (min7d - max7d) / max7d  // Max was older, negative change
+            : (max7d - min7d) / min7d; // Min was older, positive change
+
           Object.assign(result, {
             startPrice7d: m7d.startPrice,
             sparkline7d: m7d.sparkline,
             startPrice30d: m30d.startPrice,
             sparkline30d: m30d.sparkline,
             sparklineData: lClose,
-            low7d: Math.min(...lClose.slice(-7)),
+            volatility7d: volatility7d,
+            low7d: min7d,
           });
         }
 
@@ -657,9 +674,12 @@ export default function App() {
                   <td className="py-5 text-center">
                     <div className="flex flex-col items-center">
                       <Sparkline data={ticker.sparklineData} width={140} height={45} strokeWidth={2} />
-                      {ticker.low7d && (
-                        <span className="text-[9px] text-gray-600 mt-2 uppercase tracking-tighter font-medium">
-                          7d Low: {ticker.low7d.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                      {ticker.volatility7d !== undefined && (
+                        <span className={cn(
+                          "text-[10px] mt-2 font-bold tracking-tight px-1.5 py-0.5 rounded-sm",
+                          ticker.volatility7d > 0 ? "text-[#00c087] bg-[#00c087]/10" : "text-[#ff3b30] bg-[#ff3b30]/10"
+                        )}>
+                          7d: {ticker.volatility7d > 0 ? '+' : ''}{(ticker.volatility7d * 100).toFixed(2)}%
                         </span>
                       )}
                     </div>
