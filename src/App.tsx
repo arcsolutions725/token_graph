@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Star, ArrowUp, ArrowDown, Search } from 'lucide-react';
+import { Star, ArrowUp, ArrowDown, Search, Lock, User, Eye, EyeOff, LogOut } from 'lucide-react';
 import { getTickers, subscribeTickers, getContractDetails, getKlines } from './services/mexc';
 import type { Ticker, ContractDetail } from './services/mexc';
 import { clsx, type ClassValue } from 'clsx';
@@ -8,6 +8,94 @@ import { twMerge } from 'tailwind-merge';
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+const LoginPage = ({ onLogin }: { onLogin: () => void }) => {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (username === 'admin' && password === 'mexc123') {
+      onLogin();
+    } else {
+      setError('Invalid username or password');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#0b0e11] flex items-center justify-center p-4">
+      <div className="max-w-md w-full bg-[#1e2329] rounded-2xl p-8 shadow-2xl border border-white/5">
+        <div className="flex flex-col items-center mb-8">
+          <div className="w-16 h-16 bg-mexc-blue/10 rounded-full flex items-center justify-center mb-4">
+            <Lock className="w-8 h-8 text-mexc-blue" />
+          </div>
+          <h1 className="text-2xl font-bold text-white mb-2">Market Terminal</h1>
+          <p className="text-gray-400 text-sm">Please sign in to access the dashboard</p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-2">Username</label>
+            <div className="relative">
+              <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full bg-[#2b3139] border border-transparent focus:border-mexc-blue rounded-lg py-3 pl-11 pr-4 text-white outline-none transition-all placeholder:text-gray-600"
+                placeholder="Enter username"
+                required
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-2">Password</label>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-[#2b3139] border border-transparent focus:border-mexc-blue rounded-lg py-3 pl-11 pr-12 text-white outline-none transition-all placeholder:text-gray-600"
+                placeholder="Enter password"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+              >
+                {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+              </button>
+            </div>
+          </div>
+
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-red-500 text-sm text-center">
+              {error}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            className="w-full bg-mexc-blue hover:bg-mexc-blue/90 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-mexc-blue/20"
+          >
+            Sign In
+          </button>
+        </form>
+
+        <div className="mt-8 text-center">
+          <p className="text-gray-500 text-[12px]">
+            Default credentials: <span className="text-gray-400 font-mono">admin / mexc123</span>
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const Sparkline = ({ data, width = 100, height = 30, strokeWidth = 1.5 }: { data?: number[], width?: number, height?: number, strokeWidth?: number }) => {
   if (!data || data.length === 0) return <div style={{ width, height }} className="bg-white/5 rounded-sm animate-pulse" />;
@@ -56,6 +144,9 @@ const IntervalCell = ({ change, data, width = 80, height = 28 }: { change?: numb
 };
 
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return localStorage.getItem('isLoggedIn') === 'true';
+  });
   const [tickers, setTickers] = useState<(Ticker & { isNew?: boolean; iconUrl?: string })[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('Crypto');
@@ -260,6 +351,16 @@ export default function App() {
     );
   };
 
+  const handleLogin = () => {
+    setIsAuthenticated(true);
+    localStorage.setItem('isLoggedIn', 'true');
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    localStorage.removeItem('isLoggedIn');
+  };
+
   const toggleSort = (key: 'lastPrice' | 'riseFallRate' | 'change1h' | 'change4h' | 'change8h' | 'change2d' | 'change7d' | 'change30d') => {
     setSortConfig(prev => {
       if (prev?.key === key) {
@@ -328,6 +429,10 @@ export default function App() {
     return result;
   }, [tickers, activeTab, favorites, searchQuery, sortConfig]);
 
+  if (!isAuthenticated) {
+    return <LoginPage onLogin={handleLogin} />;
+  }
+
   return (
     <div className="min-h-screen bg-mexc-bg text-white font-sans selection:bg-mexc-blue/30">
       {/* Header Tabs */}
@@ -349,17 +454,26 @@ export default function App() {
             </button>
           ))}
           <div className="flex-1" />
-          <div className="relative pb-4">
-            <div className="bg-mexc-card rounded-md flex items-center px-3 py-1.5 w-72 border border-transparent focus-within:border-gray-700 transition-all">
-              <Search className="w-4 h-4 text-gray-500 mr-2" />
-              <input
-                type="text"
-                placeholder="Search Crypto / Futures"
-                className="bg-transparent border-none p-0 text-sm w-full focus:ring-0 outline-none placeholder:text-gray-600"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
+          <div className="flex items-center space-x-6 pb-4">
+            <div className="relative">
+              <div className="bg-mexc-card rounded-md flex items-center px-3 py-1.5 w-72 border border-transparent focus-within:border-gray-700 transition-all">
+                <Search className="w-4 h-4 text-gray-500 mr-2" />
+                <input
+                  type="text"
+                  placeholder="Search Crypto / Futures"
+                  className="bg-transparent border-none p-0 text-sm w-full focus:ring-0 outline-none placeholder:text-gray-600"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
             </div>
+            <button
+              onClick={handleLogout}
+              className="flex items-center space-x-2 text-gray-500 hover:text-white transition-colors text-sm font-medium px-4 py-1.5 border border-white/5 rounded-md hover:bg-white/5"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Sign Out</span>
+            </button>
           </div>
         </div>
       </div>
