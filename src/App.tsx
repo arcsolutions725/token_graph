@@ -86,12 +86,6 @@ const LoginPage = ({ onLogin }: { onLogin: () => void }) => {
             Sign In
           </button>
         </form>
-
-        <div className="mt-8 text-center">
-          <p className="text-gray-500 text-[12px]">
-            Default credentials: <span className="text-gray-400 font-mono">admin / mexc123</span>
-          </p>
-        </div>
       </div>
     </div>
   );
