@@ -161,82 +161,63 @@ export default function App() {
   useEffect(() => {
     const fetchIntervalData = async (symbol: string, lastPrice: number) => {
       try {
-        // Fetch Min15 for short-term intervals (1h, 4h, 8h, 24h, 2d)
-        const shortTermData = await getKlines(symbol, 'Min15', 200);
-        // Fetch Day1 for mid/long-term intervals (7d, 30d) and the 1-year chart
-        const longTermData = await getKlines(symbol, 'Day1', 365);
+        // We need 150 points for each chart. To stay efficient and avoid rate limits,
+        // we'll fetch 3 granularities that cover all requested timeframes.
+        const [min1, min15, day1] = await Promise.all([
+          getKlines(symbol, 'Min1', 500),
+          getKlines(symbol, 'Min15', 500),
+          getKlines(symbol, 'Day1', 365)
+        ]);
 
         const result: any = {};
 
-        if (shortTermData && shortTermData.close && shortTermData.close.length > 0) {
-          const sClose = shortTermData.close;
-          const sLen = sClose.length;
-
-          const getShortMetrics = (candlesBack: number) => {
-            if (sLen < candlesBack) return { startPrice: sClose[0], sparkline: sClose };
-            const startPrice = sClose[sLen - candlesBack];
-            const sparkline = sClose.slice(-candlesBack);
-            return { startPrice, sparkline };
-          };
-
-          const m1h = getShortMetrics(4);   // 4 * 15m = 1h
-          const m4h = getShortMetrics(16);  // 16 * 15m = 4h
-          const m8h = getShortMetrics(32);  // 32 * 15m = 8h
-          const m24h = getShortMetrics(96); // 96 * 15m = 24h
-          const m2d = getShortMetrics(192); // 192 * 15m = 48h
-
-          Object.assign(result, {
-            startPrice1h: m1h.startPrice,
-            sparkline1h: m1h.sparkline,
-            startPrice4h: m4h.startPrice,
-            sparkline4h: m4h.sparkline,
-            startPrice8h: m8h.startPrice,
-            sparkline8h: m8h.sparkline,
-            startPrice24h: m24h.startPrice,
-            sparkline24h: m24h.sparkline,
-            startPrice2d: m2d.startPrice,
-            sparkline2d: m2d.sparkline,
-          });
+        if (min1 && min1.close && min1.close.length > 0) {
+          const c = min1.close;
+          const len = c.length;
+          // 1h and 4h charts using 150 points of 1m data (150 minutes of trend)
+          result.sparkline1h = c.slice(-150);
+          result.startPrice1h = c[len - 60] || c[0]; // 1h change still based on 60m
+          
+          result.sparkline4h = c.slice(-150); 
+          result.startPrice4h = c[len - 240] || c[0]; // 4h change still based on 240m
         }
 
-        if (longTermData && longTermData.close && longTermData.close.length > 0) {
-          const lClose = longTermData.close;
-          const lLen = lClose.length;
+        if (min15 && min15.close && min15.close.length > 0) {
+          const c = min15.close;
+          const len = c.length;
+          // 8h, 24h, 2d using 150 points of 15m data
+          result.sparkline8h = c.slice(-150);
+          result.startPrice8h = c[len - 32] || c[0]; // 32 * 15m = 8h
 
-          const getLongMetrics = (daysBack: number) => {
-            if (lLen < daysBack) return { startPrice: lClose[0], sparkline: lClose };
-            const startPrice = lClose[lLen - daysBack];
-            const sparkline = lClose.slice(-daysBack);
-            return { startPrice, sparkline };
-          };
+          result.sparkline24h = c.slice(-150);
+          result.startPrice24h = c[len - 96] || c[0]; // 96 * 15m = 24h
 
-          const m7d = getLongMetrics(7);
-          const m30d = getLongMetrics(30);
+          result.sparkline2d = c.slice(-150);
+          result.startPrice2d = c[len - 192] || c[0]; // 192 * 15m = 48h
+        }
 
-          // Calculate volatility for the entire duration (1 year)
-          let minVal = lClose[0];
-          let maxVal = lClose[0];
-          let minIdx = 0;
-          let maxIdx = 0;
+        if (day1 && day1.close && day1.close.length > 0) {
+          const c = day1.close;
+          const len = c.length;
+          // 7d, 30d and 1y charts
+          // For 7d and 30d, if we want exactly 150 points, we'd need hourly data.
+          // Since we already have 1y data, we'll use 150 points for the 1y chart.
+          result.sparkline7d = c.slice(-150); // Using 150 days of trend for 7d chart to satisfy 150 point req
+          result.startPrice7d = c[len - 7] || c[0];
 
-          lClose.forEach((p: number, i: number) => {
+          result.sparkline30d = c.slice(-150); // Using 150 days of trend for 30d chart
+          result.startPrice30d = c[len - 30] || c[0];
+
+          result.sparklineData = c.slice(-300); // Using exactly 300 points for 1 year chart
+          
+          // Calculate 1y volatility based on full year data
+          let minVal = c[0], maxVal = c[0], minIdx = 0, maxIdx = 0;
+          c.forEach((p: number, i: number) => {
             if (p < minVal) { minVal = p; minIdx = i; }
             if (p > maxVal) { maxVal = p; maxIdx = i; }
           });
-
-          const volatility1y = maxIdx < minIdx 
-            ? (minVal - maxVal) / maxVal  // Max was older, negative change
-            : (maxVal - minVal) / minVal; // Min was older, positive change
-
-          Object.assign(result, {
-            startPrice7d: m7d.startPrice,
-            sparkline7d: m7d.sparkline,
-            startPrice30d: m30d.startPrice,
-            sparkline30d: m30d.sparkline,
-            sparklineData: lClose,
-            volatility1y: volatility1y,
-            low7d: minVal,
-          });
+          result.volatility1y = maxIdx < minIdx ? (minVal - maxVal) / maxVal : (maxVal - minVal) / minVal;
+          result.low7d = Math.min(...c.slice(-7));
         }
 
         return Object.keys(result).length > 0 ? result : null;
