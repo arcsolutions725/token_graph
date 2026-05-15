@@ -161,54 +161,62 @@ export default function App() {
   useEffect(() => {
     const fetchIntervalData = async (symbol: string, lastPrice: number) => {
       try {
-        // We need 150 points for each chart. To stay efficient and avoid rate limits,
-        // we'll fetch 3 granularities that cover all requested timeframes.
-        const [min1, min15, day1] = await Promise.all([
-          getKlines(symbol, 'Min1', 500),
-          getKlines(symbol, 'Min15', 500),
-          getKlines(symbol, 'Day1', 365)
+        // Fetch specific granularities to ensure each interval has its own UNIQUE chart data
+        // Each chart will use exactly 300 points for consistent density
+        const [m1, m5, m15, m60, d1] = await Promise.all([
+          getKlines(symbol, 'Min1', 300),  // For 1h (60m -> we use 300 points of 1m)
+          getKlines(symbol, 'Min5', 300),  // For 4h (240m -> we use 300 points of 5m)
+          getKlines(symbol, 'Min15', 300), // For 8h (480m -> we use 300 points of 15m)
+          getKlines(symbol, 'Min60', 300), // For 24h/2d (1440m/2880m -> we use 300 points of 60m)
+          getKlines(symbol, 'Day1', 365)   // For 7d/30d/1y
         ]);
 
         const result: any = {};
 
-        if (min1 && min1.close && min1.close.length > 0) {
-          const c = min1.close;
-          const len = c.length;
-          // 1h and 4h charts using 150 points of 1m data (150 minutes of trend)
-          result.sparkline1h = c.slice(-150);
-          result.startPrice1h = c[len - 60] || c[0]; // 1h change still based on 60m
+        // 1h Chart (using 300 points of 1m data)
+        if (m1 && m1.close && m1.close.length > 0) {
+          result.sparkline1h = m1.close;
+          result.startPrice1h = m1.close[Math.max(0, m1.close.length - 60)];
+        }
+
+        // 4h Chart (using 300 points of 5m data)
+        if (m5 && m5.close && m5.close.length > 0) {
+          result.sparkline4h = m5.close;
+          result.startPrice4h = m5.close[Math.max(0, m5.close.length - 48)]; // 48 * 5m = 4h
+        }
+
+        // 8h Chart (using 300 points of 15m data)
+        if (m15 && m15.close && m15.close.length > 0) {
+          result.sparkline8h = m15.close;
+          result.startPrice8h = m15.close[Math.max(0, m15.close.length - 32)]; // 32 * 15m = 8h
+        }
+
+        // 24h & 2d Charts (using 300 points of 60m data)
+        if (m60 && m60.close && m60.close.length > 0) {
+          result.sparkline24h = m60.close;
+          result.startPrice24h = m60.close[Math.max(0, m60.close.length - 24)]; // 24 * 60m = 24h
           
-          result.sparkline4h = c.slice(-150); 
-          result.startPrice4h = c[len - 240] || c[0]; // 4h change still based on 240m
+          // For 2d we'll also use 60m data but we can take the last 300 points (which is ~12 days)
+          // or we can just use the same 60m granularity as it provides good detail for a 2d view
+          result.sparkline2d = m60.close;
+          result.startPrice2d = m60.close[Math.max(0, m60.close.length - 48)]; // 48 * 60m = 2d
         }
 
-        if (min15 && min15.close && min15.close.length > 0) {
-          const c = min15.close;
+        // 7d, 30d, and 1y Charts (using Day1 data)
+        if (d1 && d1.close && d1.close.length > 0) {
+          const c = d1.close;
           const len = c.length;
-          // 8h, 24h, 2d using 150 points of 15m data
-          result.sparkline8h = c.slice(-150);
-          result.startPrice8h = c[len - 32] || c[0]; // 32 * 15m = 8h
+          
+          // 7d Chart (using 300 points of daily data is too much, so we take what we have)
+          result.sparkline7d = c.slice(-7); 
+          result.startPrice7d = c[Math.max(0, len - 7)];
 
-          result.sparkline24h = c.slice(-150);
-          result.startPrice24h = c[len - 96] || c[0]; // 96 * 15m = 24h
+          // 30d Chart
+          result.sparkline30d = c.slice(-30);
+          result.startPrice30d = c[Math.max(0, len - 30)];
 
-          result.sparkline2d = c.slice(-150);
-          result.startPrice2d = c[len - 192] || c[0]; // 192 * 15m = 48h
-        }
-
-        if (day1 && day1.close && day1.close.length > 0) {
-          const c = day1.close;
-          const len = c.length;
-          // 7d, 30d and 1y charts
-          // For 7d and 30d, if we want exactly 150 points, we'd need hourly data.
-          // Since we already have 1y data, we'll use 150 points for the 1y chart.
-          result.sparkline7d = c.slice(-150); // Using 150 days of trend for 7d chart to satisfy 150 point req
-          result.startPrice7d = c[len - 7] || c[0];
-
-          result.sparkline30d = c.slice(-150); // Using 150 days of trend for 30d chart
-          result.startPrice30d = c[len - 30] || c[0];
-
-          result.sparklineData = c.slice(-300); // Using exactly 300 points for 1 year chart
+          // 1y Chart (exactly 300 points as requested before)
+          result.sparklineData = c.slice(-300);
           
           // Calculate 1y volatility based on full year data
           let minVal = c[0], maxVal = c[0], minIdx = 0, maxIdx = 0;
@@ -217,7 +225,6 @@ export default function App() {
             if (p > maxVal) { maxVal = p; maxIdx = i; }
           });
           result.volatility1y = maxIdx < minIdx ? (minVal - maxVal) / maxVal : (maxVal - minVal) / minVal;
-          result.low7d = Math.min(...c.slice(-7));
         }
 
         return Object.keys(result).length > 0 ? result : null;
