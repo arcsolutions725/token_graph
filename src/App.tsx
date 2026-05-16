@@ -91,42 +91,82 @@ const LoginPage = ({ onLogin }: { onLogin: () => void }) => {
   );
 };
 
-const Sparkline = ({ data, width = 100, height = 30, strokeWidth = 1.5 }: { data?: number[], width?: number, height?: number, strokeWidth?: number }) => {
+const Sparkline = ({ data, dataOpen, dataTime, width = 100, height = 30, maxPoints, showDailyLines }: { data?: number[], dataOpen?: number[], dataTime?: number[], width?: number, height?: number, maxPoints?: number, showDailyLines?: boolean }) => {
   if (!data || data.length === 0) return <div style={{ width, height }} className="bg-white/5 rounded-sm animate-pulse" />;
   
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+  const allValues = dataOpen ? [...data, ...dataOpen] : data;
+  const min = Math.min(...allValues);
+  const max = Math.max(...allValues);
   const range = max - min || 1;
   
-  const points = data.map((val, i) => {
-    const x = (i / (data.length - 1)) * width;
-    const y = height - ((val - min) / range) * height;
-    return `${x},${y}`;
-  }).join(' ');
+  const effectivePoints = maxPoints || data.length;
+  const candleWidth = width / effectivePoints;
+  const offset = maxPoints ? (maxPoints - data.length) * candleWidth : 0;
+  const gap = candleWidth * 0.1;
 
-  const isUp = data[data.length - 1] >= data[0];
+  // Generate vertical lines synchronized with MEXC server time (candle timestamps)
+  const verticalLines = [];
+  if (showDailyLines && dataTime) {
+    dataTime.forEach((timestamp, i) => {
+      // Check if this candle marks the start of a new day in UTC (00:00)
+      const date = new Date(timestamp * 1000);
+      if (date.getUTCHours() === 0) {
+        const lineX = offset + (i * candleWidth);
+        if (lineX > offset && lineX < width + offset) {
+          verticalLines.push(lineX);
+        }
+      }
+    });
+  }
 
   return (
     <svg width={width} height={height} className="overflow-visible">
-      <polyline
-        fill="none"
-        stroke={isUp ? '#00c087' : '#ff3b30'}
-        strokeWidth={strokeWidth}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        points={points}
-      />
+      {/* Daily separator markers (dots at the top) */}
+      {verticalLines.map((lx, idx) => (
+        <circle
+          key={`dot-${idx}`}
+          cx={lx}
+          cy={0}
+          r={1.5}
+          fill="white"
+          fillOpacity="0.8"
+          className="drop-shadow-[0_0_2px_rgba(255,255,255,0.8)]"
+        />
+      ))}
+      {data.map((close, i) => {
+        const open = (dataOpen && dataOpen[i] !== undefined) ? dataOpen[i] : (i > 0 ? data[i-1] : close);
+        const x = offset + (i * candleWidth);
+        const yOpen = height - ((open - min) / range) * height;
+        const yClose = height - ((close - min) / range) * height;
+        
+        const top = Math.min(yOpen, yClose);
+        const bottom = Math.max(yOpen, yClose);
+        const candleHeight = Math.max(bottom - top, 0.5); // Ensure at least 0.5px height
+        const isUp = close >= open;
+
+        return (
+          <rect
+            key={i}
+            x={x}
+            y={top}
+            width={Math.max(candleWidth - (candleWidth > 2 ? gap * 2 : 0), 0.1)}
+            height={candleHeight}
+            fill={isUp ? '#00c087' : '#ff3b30'}
+            className="transition-all duration-300"
+          />
+        );
+      })}
     </svg>
   );
 };
 
-const IntervalCell = ({ change, data, width = 80, height = 28 }: { change?: number, data?: number[], width?: number, height?: number }) => {
+const IntervalCell = ({ change, data, dataOpen, dataTime, width = 80, height = 28, maxPoints, showDailyLines }: { change?: number, data?: number[], dataOpen?: number[], dataTime?: number[], width?: number, height?: number, maxPoints?: number, showDailyLines?: boolean }) => {
   const isUp = change !== undefined && change > 0;
   const isDown = change !== undefined && change < 0;
   
   return (
     <div className="flex flex-col items-end space-y-1.5">
-      <Sparkline data={data} width={width} height={height} strokeWidth={1.5} />
+      <Sparkline data={data} dataOpen={dataOpen} dataTime={dataTime} width={width} height={height} maxPoints={maxPoints} showDailyLines={showDailyLines} />
       <span className={cn(
         "font-bold text-[13px] tracking-tight leading-none",
         change === undefined ? "text-gray-700" : (isUp ? "text-[#00c087]" : isDown ? "text-[#ff3b30]" : "text-gray-500")
@@ -151,7 +191,7 @@ export default function App() {
   });
   const [searchQuery, setSearchQuery] = useState('');
   const [sortConfig, setSortConfig] = useState<{ 
-    key: 'lastPrice' | 'riseFallRate' | 'change1h' | 'change4h' | 'change8h' | 'change2d' | 'change7d' | 'change30d', 
+    key: 'lastPrice' | 'riseFallRate', 
     direction: 'asc' | 'desc' 
   } | null>({
     key: 'riseFallRate',
@@ -161,68 +201,63 @@ export default function App() {
   useEffect(() => {
     const fetchIntervalData = async (symbol: string, lastPrice: number) => {
       try {
-        // Fetch specific granularities for each unique chart
-        const [m1, m5, m15, m60, m240, d1] = await Promise.all([
-          getKlines(symbol, 'Min1', 300),   // 1h
-          getKlines(symbol, 'Min5', 300),   // 4h
-          getKlines(symbol, 'Min15', 300),  // 8h
-          getKlines(symbol, 'Min60', 300),  // 24h, 2d, 7d (1h candles)
-          getKlines(symbol, 'Min240', 300), // 30d (4h candles)
-          getKlines(symbol, 'Day1', 365)    // 1y
-        ]);
+        // Fetch Min60 for short-term intervals (6d = 144h)
+        const shortTermData = await getKlines(symbol, 'Min60', 144);
+        // Fetch Day1 for the 1-year chart
+        const longTermData = await getKlines(symbol, 'Day1', 365);
 
         const result: any = {};
 
-        // 1h Chart (1m candles)
-        if (m1 && m1.close && m1.close.length > 0) {
-          result.sparkline1h = m1.close;
-          result.startPrice1h = m1.close[Math.max(0, m1.close.length - 60)];
+        if (shortTermData && shortTermData.close && shortTermData.close.length > 0) {
+          const sClose = shortTermData.close;
+          const sOpen = shortTermData.open || [];
+          const sTime = shortTermData.time || [];
+          const sLen = sClose.length;
+
+          const getShortMetrics = (candlesBack: number) => {
+            if (sLen < candlesBack) return { startPrice: sClose[0], sparkline: sClose, sparklineOpen: sOpen, sparklineTime: sTime };
+            const startPrice = sClose[sLen - candlesBack];
+            const sparkline = sClose.slice(-candlesBack);
+            const sparklineOpen = sOpen.slice(-candlesBack);
+            const sparklineTime = sTime.slice(-candlesBack);
+            return { startPrice, sparkline, sparklineOpen, sparklineTime };
+          };
+
+          const m6d = getShortMetrics(144); // 144 * 1h = 144h (6 days)
+
+          Object.assign(result, {
+            startPrice6d: m6d.startPrice,
+            sparkline6d: m6d.sparkline,
+            sparkline6dOpen: m6d.sparklineOpen,
+            sparkline6dTime: m6d.sparklineTime,
+          });
         }
 
-        // 4h Chart (5m candles)
-        if (m5 && m5.close && m5.close.length > 0) {
-          result.sparkline4h = m5.close;
-          result.startPrice4h = m5.close[Math.max(0, m5.close.length - 48)];
-        }
+        if (longTermData && longTermData.close && longTermData.close.length > 0) {
+          const lClose = longTermData.close;
+          const lOpen = longTermData.open || [];
+          const lLen = lClose.length;
 
-        // 8h Chart (15m candles)
-        if (m15 && m15.close && m15.close.length > 0) {
-          result.sparkline8h = m15.close;
-          result.startPrice8h = m15.close[Math.max(0, m15.close.length - 32)];
-        }
+          // Calculate volatility for the entire duration (1 year)
+          let minVal = lClose[0];
+          let maxVal = lClose[0];
+          let minIdx = 0;
+          let maxIdx = 0;
 
-        // 24h, 2d, and 7d Charts (1h candles)
-        if (m60 && m60.close && m60.close.length > 0) {
-          result.sparkline24h = m60.close.slice(-150);
-          result.startPrice24h = m60.close[Math.max(0, m60.close.length - 24)];
-          
-          result.sparkline2d = m60.close.slice(-150);
-          result.startPrice2d = m60.close[Math.max(0, m60.close.length - 48)];
-
-          // 7d Chart (using 1h candles as requested)
-          // 7 days * 24 hours = 168 points
-          result.sparkline7d = m60.close.slice(-168);
-          result.startPrice7d = m60.close[Math.max(0, m60.close.length - 168)];
-        }
-
-        // 30d Chart (using 4h candles as requested)
-        // 30 days * 6 candles/day = 180 points
-        if (m240 && m240.close && m240.close.length > 0) {
-          result.sparkline30d = m240.close.slice(-180);
-          result.startPrice30d = m240.close[Math.max(0, m240.close.length - 180)];
-        }
-
-        // 1y Chart (Day1 data)
-        if (d1 && d1.close && d1.close.length > 0) {
-          const c = d1.close;
-          result.sparklineData = c.slice(-300);
-          
-          let minVal = c[0], maxVal = c[0], minIdx = 0, maxIdx = 0;
-          c.forEach((p: number, i: number) => {
+          lClose.forEach((p: number, i: number) => {
             if (p < minVal) { minVal = p; minIdx = i; }
             if (p > maxVal) { maxVal = p; maxIdx = i; }
           });
-          result.volatility1y = maxIdx < minIdx ? (minVal - maxVal) / maxVal : (maxVal - minVal) / minVal;
+
+          const volatility1y = maxIdx < minIdx 
+            ? (minVal - maxVal) / maxVal  // Max was older, negative change
+            : (maxVal - minVal) / minVal; // Min was older, positive change
+
+          Object.assign(result, {
+            sparklineData: lClose,
+            sparklineDataOpen: lOpen,
+            volatility1y: volatility1y,
+          });
         }
 
         return Object.keys(result).length > 0 ? result : null;
@@ -245,11 +280,6 @@ export default function App() {
           ...t,
           isNew: detailMap.get(t.symbol)?.isNew,
           iconUrl: detailMap.get(t.symbol)?.baseCoinIconUrl,
-          // Real data will be fetched and updated below
-          change1h: undefined,
-          change4h: undefined,
-          change8h: undefined,
-          change2d: undefined,
         }));
         
         setTickers(initialTickers);
@@ -311,14 +341,7 @@ export default function App() {
                 // Merge while preserving our custom fields
                 updated[index] = { ...updated[index], ...newTicker };
               } else {
-                // For new tickers, we add them with default mocks
-                updated.push({
-                  ...newTicker,
-                  change1h: newTicker.riseFallRate * 0.4,
-                  change4h: newTicker.riseFallRate * 0.6,
-                  change8h: newTicker.riseFallRate * 0.8,
-                  change2d: newTicker.riseFallRate * 1.5,
-                });
+                updated.push(newTicker);
               }
             });
             return updated;
@@ -357,7 +380,7 @@ export default function App() {
     localStorage.removeItem('isLoggedIn');
   };
 
-  const toggleSort = (key: 'lastPrice' | 'riseFallRate' | 'change1h' | 'change4h' | 'change8h' | 'change2d' | 'change7d' | 'change30d') => {
+  const toggleSort = (key: 'lastPrice' | 'riseFallRate') => {
     setSortConfig(prev => {
       if (prev?.key === key) {
         return { key, direction: prev.direction === 'desc' ? 'asc' : 'desc' };
@@ -386,39 +409,8 @@ export default function App() {
     
     if (sortConfig) {
       return [...result].sort((a, b) => {
-        let aVal: number;
-        let bVal: number;
-
-        switch (sortConfig.key) {
-          case 'change1h':
-            aVal = a.startPrice1h ? (a.lastPrice - a.startPrice1h) / a.startPrice1h : -Infinity;
-            bVal = b.startPrice1h ? (b.lastPrice - b.startPrice1h) / b.startPrice1h : -Infinity;
-            break;
-          case 'change4h':
-            aVal = a.startPrice4h ? (a.lastPrice - a.startPrice4h) / a.startPrice4h : -Infinity;
-            bVal = b.startPrice4h ? (b.lastPrice - b.startPrice4h) / b.startPrice4h : -Infinity;
-            break;
-          case 'change8h':
-            aVal = a.startPrice8h ? (a.lastPrice - a.startPrice8h) / a.startPrice8h : -Infinity;
-            bVal = b.startPrice8h ? (b.lastPrice - b.startPrice8h) / b.startPrice8h : -Infinity;
-            break;
-          case 'change2d':
-             aVal = a.startPrice2d ? (a.lastPrice - a.startPrice2d) / a.startPrice2d : -Infinity;
-             bVal = b.startPrice2d ? (b.lastPrice - b.startPrice2d) / b.startPrice2d : -Infinity;
-             break;
-           case 'change7d':
-             aVal = a.startPrice7d ? (a.lastPrice - a.startPrice7d) / a.startPrice7d : -Infinity;
-             bVal = b.startPrice7d ? (b.lastPrice - b.startPrice7d) / b.startPrice7d : -Infinity;
-             break;
-           case 'change30d':
-             aVal = a.startPrice30d ? (a.lastPrice - a.startPrice30d) / a.startPrice30d : -Infinity;
-             bVal = b.startPrice30d ? (b.lastPrice - b.startPrice30d) / b.startPrice30d : -Infinity;
-             break;
-           default:
-            aVal = (a[sortConfig.key] as number) || 0;
-            bVal = (b[sortConfig.key] as number) || 0;
-        }
-
+        const aVal = (a[sortConfig.key] as number) || 0;
+        const bVal = (b[sortConfig.key] as number) || 0;
         return sortConfig.direction === 'desc' ? bVal - aVal : aVal - bVal;
       });
     }
@@ -495,7 +487,7 @@ export default function App() {
 
       {/* Table */}
       <div className="px-6 py-6 pb-20 overflow-x-auto">
-        <div className="max-w-[1400px] mx-auto">
+        <div className="max-w-[1900px] mx-auto">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="text-gray-500 text-[12px] border-b border-gray-900/50">
@@ -512,80 +504,14 @@ export default function App() {
                     )}
                   </div>
                 </th>
-                <th className="pb-4 font-normal text-center w-64">Last 1 Year</th>
+                <th className="pb-4 font-normal text-center w-[600px]">Last 1 Year</th>
                 <th 
-                  className="pb-4 font-normal text-right cursor-pointer hover:text-white transition-colors w-32"
-                  onClick={() => toggleSort('change30d')}
-                >
-                  <div className="flex items-center justify-end space-x-1">
-                    <span>30d</span>
-                    {sortConfig?.key === 'change30d' && (
-                      sortConfig.direction === 'desc' ? <ArrowDown className="w-3 h-3" /> : <ArrowUp className="w-3 h-3" />
-                    )}
-                  </div>
-                </th>
-                <th 
-                  className="pb-4 font-normal text-right cursor-pointer hover:text-white transition-colors w-32"
-                  onClick={() => toggleSort('change7d')}
-                >
-                  <div className="flex items-center justify-end space-x-1">
-                    <span>7d</span>
-                    {sortConfig?.key === 'change7d' && (
-                      sortConfig.direction === 'desc' ? <ArrowDown className="w-3 h-3" /> : <ArrowUp className="w-3 h-3" />
-                    )}
-                  </div>
-                </th>
-                <th 
-                  className="pb-4 font-normal text-right cursor-pointer hover:text-white transition-colors w-32"
-                  onClick={() => toggleSort('change2d')}
-                >
-                  <div className="flex items-center justify-end space-x-1">
-                    <span>2d</span>
-                    {sortConfig?.key === 'change2d' && (
-                      sortConfig.direction === 'desc' ? <ArrowDown className="w-3 h-3" /> : <ArrowUp className="w-3 h-3" />
-                    )}
-                  </div>
-                </th>
-                <th 
-                  className="pb-4 font-normal text-right cursor-pointer hover:text-white transition-colors w-32"
+                  className="pb-4 font-normal text-right cursor-pointer hover:text-white transition-colors w-[600px] pr-4"
                   onClick={() => toggleSort('riseFallRate')}
                 >
                   <div className="flex items-center justify-end space-x-1">
-                    <span>24h</span>
+                    <span>6d</span>
                     {sortConfig?.key === 'riseFallRate' && (
-                      sortConfig.direction === 'desc' ? <ArrowDown className="w-3 h-3" /> : <ArrowUp className="w-3 h-3" />
-                    )}
-                  </div>
-                </th>
-                <th 
-                  className="pb-4 font-normal text-right cursor-pointer hover:text-white transition-colors w-32"
-                  onClick={() => toggleSort('change8h')}
-                >
-                  <div className="flex items-center justify-end space-x-1">
-                    <span>8h</span>
-                    {sortConfig?.key === 'change8h' && (
-                      sortConfig.direction === 'desc' ? <ArrowDown className="w-3 h-3" /> : <ArrowUp className="w-3 h-3" />
-                    )}
-                  </div>
-                </th>
-                <th 
-                  className="pb-4 font-normal text-right cursor-pointer hover:text-white transition-colors w-32"
-                  onClick={() => toggleSort('change4h')}
-                >
-                  <div className="flex items-center justify-end space-x-1">
-                    <span>4h</span>
-                    {sortConfig?.key === 'change4h' && (
-                      sortConfig.direction === 'desc' ? <ArrowDown className="w-3 h-3" /> : <ArrowUp className="w-3 h-3" />
-                    )}
-                  </div>
-                </th>
-                <th 
-                  className="pb-4 font-normal text-right cursor-pointer hover:text-white transition-colors pr-4 w-32"
-                  onClick={() => toggleSort('change1h')}
-                >
-                  <div className="flex items-center justify-end space-x-1">
-                    <span>1h</span>
-                    {sortConfig?.key === 'change1h' && (
                       sortConfig.direction === 'desc' ? <ArrowDown className="w-3 h-3" /> : <ArrowUp className="w-3 h-3" />
                     )}
                   </div>
@@ -594,14 +520,14 @@ export default function App() {
             </thead>
             <tbody className="text-sm">
               {loading ? (
-                <tr><td colSpan={8} className="text-center py-40">
+                <tr><td colSpan={5} className="text-center py-40">
                   <div className="flex flex-col items-center space-y-4">
-                    <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                    <div className="w-10 h-10 border-2 border-mexc-blue border-t-transparent rounded-full animate-spin" />
                     <span className="text-gray-500 text-sm tracking-wide">Fetching market data...</span>
                   </div>
                 </td></tr>
               ) : filteredTickers.length === 0 ? (
-                <tr><td colSpan={8} className="text-center py-32 text-gray-500 text-sm">No matching pairs found</td></tr>
+                <tr><td colSpan={5} className="text-center py-32 text-gray-500 text-sm">No matching pairs found</td></tr>
               ) : filteredTickers.map((ticker) => (
                 <tr key={ticker.symbol} className="border-b border-white/[0.03] hover:bg-white/[0.02] transition-all group">
                   <td className="py-5 pl-2">
@@ -658,7 +584,7 @@ export default function App() {
                   </td>
                   <td className="py-5 text-center">
                     <div className="flex flex-col items-center">
-                      <Sparkline data={ticker.sparklineData} width={140} height={45} strokeWidth={2} />
+                      <Sparkline data={ticker.sparklineData} dataOpen={ticker.sparklineDataOpen} width={580} height={100} maxPoints={365} />
                       {ticker.volatility1y !== undefined && (
                         <span className={cn(
                           "text-[10px] mt-2 font-bold tracking-tight px-1.5 py-0.5 rounded-sm",
@@ -669,46 +595,16 @@ export default function App() {
                       )}
                     </div>
                   </td>
-                  <td className="py-5 text-right">
-                      <IntervalCell 
-                        change={ticker.startPrice30d ? (ticker.lastPrice - ticker.startPrice30d) / ticker.startPrice30d : undefined} 
-                        data={ticker.sparkline30d} 
-                      />
-                    </td>
-                    <td className="py-5 text-right">
-                      <IntervalCell 
-                        change={ticker.startPrice7d ? (ticker.lastPrice - ticker.startPrice7d) / ticker.startPrice7d : undefined} 
-                        data={ticker.sparkline7d} 
-                      />
-                    </td>
-                    <td className="py-5 text-right">
-                      <IntervalCell 
-                        change={ticker.startPrice2d ? (ticker.lastPrice - ticker.startPrice2d) / ticker.startPrice2d : undefined} 
-                        data={ticker.sparkline2d} 
-                      />
-                    </td>
-                    <td className="py-5 text-right">
-                      <IntervalCell 
-                        change={ticker.riseFallRate} 
-                        data={ticker.sparkline24h} 
-                      />
-                    </td>
-                    <td className="py-5 text-right">
-                      <IntervalCell 
-                        change={ticker.startPrice8h ? (ticker.lastPrice - ticker.startPrice8h) / ticker.startPrice8h : undefined} 
-                        data={ticker.sparkline8h} 
-                      />
-                    </td>
-                    <td className="py-5 text-right">
-                      <IntervalCell 
-                        change={ticker.startPrice4h ? (ticker.lastPrice - ticker.startPrice4h) / ticker.startPrice4h : undefined} 
-                        data={ticker.sparkline4h} 
-                      />
-                    </td>
                     <td className="py-5 text-right pr-4">
                       <IntervalCell 
-                        change={ticker.startPrice1h ? (ticker.lastPrice - ticker.startPrice1h) / ticker.startPrice1h : undefined} 
-                        data={ticker.sparkline1h} 
+                        change={ticker.startPrice6d ? (ticker.lastPrice - ticker.startPrice6d) / ticker.startPrice6d : undefined} 
+                        data={ticker.sparkline6d} 
+                        dataOpen={ticker.sparkline6dOpen}
+                        dataTime={ticker.sparkline6dTime}
+                        width={580}
+                        height={80}
+                        maxPoints={144}
+                        showDailyLines={true}
                       />
                     </td>
                 </tr>
